@@ -1,0 +1,16 @@
+# Note: .dockerignore filters the whole build context, not per-stage --
+# tests/ must stay included here so the Dockerfile's `test` stage can
+# COPY it in; the `runtime` stage simply never copies it.
+.venv/
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+data/
+.env
+.git/
+.gitignore
+*.db
+*.db-shm
+*.db-wal
+.DS_Store

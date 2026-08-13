@@ -1,0 +1,42 @@
+services:
+  brain-os:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: brain-os-enterprise-workflow-platform:latest
+    container_name: brain-os
+    restart: unless-stopped
+    ports:
+      - "${PORT:-8000}:8000"
+    # .env is read from the host at container start (never baked into the
+    # image -- see .dockerignore). Copy .env.example to .env to customize.
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      APP_NAME: "Brain OS Enterprise Workflow Platform"
+      ENVIRONMENT: ${ENVIRONMENT:-production}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      AUTO_APPROVE_THRESHOLD: ${AUTO_APPROVE_THRESHOLD:-5000.0}
+      DATABASE_PATH: /app/data/brain_os.db
+      CHECKPOINT_DB_PATH: /app/data/checkpoints.db
+      CHROMA_PERSIST_PATH: /app/data/chroma
+      CHROMA_COLLECTION_NAME: ${CHROMA_COLLECTION_NAME:-invoice_memory}
+      DUPLICATE_SIMILARITY_THRESHOLD: ${DUPLICATE_SIMILARITY_THRESHOLD:-0.92}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-sonnet-4-5}
+      SLACK_BOT_TOKEN: ${SLACK_BOT_TOKEN:-}
+      SLACK_APPROVAL_CHANNEL: ${SLACK_APPROVAL_CHANNEL:-}
+    volumes:
+      # Named volume so brain_os.db / checkpoints.db / the Chroma index
+      # survive container restarts and image rebuilds.
+      - brain-os-data:/app/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/health', timeout=3).status == 200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+volumes:
+  brain-os-data:
