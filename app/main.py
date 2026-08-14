@@ -15,6 +15,8 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from langgraph.checkpoint.sqlite import SqliteSaver
 
+from app.api.middleware import MaxBodySizeMiddleware
+from app.api.rate_limit import RateLimiter
 from app.api.routes import router
 from app.database.connection import init_schema
 from app.database.vector_store import VectorMemory
@@ -54,6 +56,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     app.state.settings = settings
     app.state.engine = engine
+    app.state.rate_limiter = RateLimiter(settings.rate_limit_max_requests, settings.rate_limit_window_seconds)
 
     logger.info(
         "%s starting up (environment=%s, db=%s)", settings.app_name, settings.environment, settings.database_path
@@ -72,6 +75,9 @@ def create_app() -> FastAPI:
         version="0.1.0",
         lifespan=lifespan,
     )
+    # Added at construction time (not in lifespan): Starlette requires
+    # middleware to be registered before the app starts serving.
+    application.add_middleware(MaxBodySizeMiddleware, max_bytes=get_settings().max_request_body_bytes)
     application.include_router(router)
 
     @application.get("/health", tags=["system"])

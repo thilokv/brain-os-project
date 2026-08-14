@@ -6,15 +6,19 @@
     GET  /brain-os/audit/{id}      Facility: Auditability
 
 Every route in this router requires a Bearer token matching
-BRAIN_OS_API_TOKEN (see app/api/security.py). GET /health is
-deliberately NOT part of this router -- it's registered directly on the
-app in app/main.py so container health checks never need credentials.
+BRAIN_OS_API_TOKEN (see app/api/security.py) and is subject to a
+per-token rate limit (see app/api/rate_limit.py), checked in that
+order so a failed auth attempt never consumes rate-limit quota.
+GET /health is deliberately NOT part of this router -- it's registered
+directly on the app in app/main.py so container health checks never
+need credentials or count against any limit.
 """
 
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
+from app.api.rate_limit import enforce_rate_limit
 from app.api.security import require_api_token
 from app.database import repository
 from app.models.schemas import (
@@ -32,7 +36,11 @@ from app.utils.logging import get_logger
 from app.workflows.graph import WorkflowEngine
 
 logger = get_logger(__name__)
-router = APIRouter(prefix="/brain-os", tags=["brain-os"], dependencies=[Depends(require_api_token)])
+router = APIRouter(
+    prefix="/brain-os",
+    tags=["brain-os"],
+    dependencies=[Depends(require_api_token), Depends(enforce_rate_limit)],
+)
 
 
 def _engine(request: Request) -> WorkflowEngine:

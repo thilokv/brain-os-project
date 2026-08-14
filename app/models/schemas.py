@@ -21,7 +21,10 @@ WorkflowStatus = Literal[
 class InvoiceIntakeRequest(BaseModel):
     """Payload for POST /brain-os/start."""
 
-    text: str = Field(..., min_length=1, description="Raw invoice text to ingest.")
+    # max_length is a sanity bound on the parsed field, not the request-body
+    # DoS defense -- that's MaxBodySizeMiddleware (app/api/middleware.py),
+    # which rejects an oversized body before it's ever parsed this far.
+    text: str = Field(..., min_length=1, max_length=50_000, description="Raw invoice text to ingest.")
 
     @field_validator("text")
     @classmethod

@@ -50,6 +50,16 @@ class Settings(BaseSettings):
     # app/api/security.py). There is no default that opens the API.
     brain_os_api_token: str = ""
 
+    # Rate limiting: max requests per caller (keyed by bearer token) within
+    # a rolling window, enforced per process (see app/api/rate_limit.py).
+    rate_limit_max_requests: int = 60
+    rate_limit_window_seconds: float = 60.0
+
+    # Reject any request whose Content-Length exceeds this before the body
+    # is ever parsed (see app/api/middleware.py). 1 MiB is comfortably
+    # larger than any real invoice text payload.
+    max_request_body_bytes: int = 1_048_576
+
     def ensure_data_dir(self) -> None:
         Path(self.database_path).parent.mkdir(parents=True, exist_ok=True)
         Path(self.checkpoint_db_path).parent.mkdir(parents=True, exist_ok=True)

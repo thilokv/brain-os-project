@@ -41,3 +41,25 @@ def client(tmp_path, monkeypatch):
 def auth_headers():
     """Authorization header for the test-only token set on the `client` fixture."""
     return {"Authorization": f"Bearer {TEST_API_TOKEN}"}
+
+
+@pytest.fixture
+def low_rate_limit_client(tmp_path, monkeypatch):
+    """Same setup as `client`, but with a rate limit low enough (2 requests
+    per 60s) to deterministically trigger 429 without firing dozens of
+    real requests."""
+    monkeypatch.setenv("DATABASE_PATH", str(tmp_path / "brain_os.db"))
+    monkeypatch.setenv("CHECKPOINT_DB_PATH", str(tmp_path / "checkpoints.db"))
+    monkeypatch.setenv("CHROMA_PERSIST_PATH", str(tmp_path / "chroma"))
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "")
+    monkeypatch.setenv("SLACK_BOT_TOKEN", "")
+    monkeypatch.setenv("BRAIN_OS_API_TOKEN", TEST_API_TOKEN)
+    monkeypatch.setenv("RATE_LIMIT_MAX_REQUESTS", "2")
+    monkeypatch.setenv("RATE_LIMIT_WINDOW_SECONDS", "60")
+    get_settings.cache_clear()
+
+    app = create_app()
+    with TestClient(app) as test_client:
+        yield test_client
+
+    get_settings.cache_clear()

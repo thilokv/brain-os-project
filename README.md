@@ -10,7 +10,8 @@ briefing -- with every step persisted to SQLite for a full audit trail.
 ```
 app/
   api/         FastAPI routes (/brain-os/start, /resume, /status, /audit)
-               + bearer-token auth dependency (security.py)
+               + bearer-token auth (security.py), rate limiting
+               (rate_limit.py), and body-size middleware (middleware.py)
   workflows/   LangGraph state machine: extract -> risk -> approval_gate -> briefing
   services/    Business logic: document intelligence, risk engine,
                executive briefing (Anthropic), Slack notifications
@@ -18,7 +19,7 @@ app/
                + ChromaDB vector memory for duplicate detection
   models/      Pydantic schemas shared across the API and workflow
   utils/       Settings (pydantic-settings) and logging
-tests/         pytest suite (34 tests) against a real FastAPI TestClient
+tests/         pytest suite (42 tests) against a real FastAPI TestClient
 ```
 
 ### The workflow
@@ -96,6 +97,29 @@ through your platform's secret manager (see Deployment path below) --
 never commit a real value. `.env` is git-ignored and docker-ignored for
 exactly this reason.
 
+### Rate limiting and request size limits
+
+A valid bearer token proves *who* is calling, not that they're calling
+responsibly -- every `/brain-os/*` endpoint is also protected by:
+
+- **Rate limiting**: each caller (keyed by their bearer token) is capped
+  at `RATE_LIMIT_MAX_REQUESTS` requests (default `60`) per
+  `RATE_LIMIT_WINDOW_SECONDS` (default `60`). Exceeding it returns `429`
+  with a `Retry-After` header. A request that fails authentication is
+  rejected before this check runs, so failed-token attempts never eat
+  into another caller's quota. The limiter is in-memory and
+  per-process -- see Known limitations below.
+- **Request body size cap**: any request body over `MAX_REQUEST_BODY_BYTES`
+  (default `1048576`, i.e. 1 MiB) is rejected with `413` based on its
+  `Content-Length` header, before the body is ever read or parsed.
+  Independently, `InvoiceIntakeRequest.text` also has a 50,000-character
+  Pydantic `max_length`, so a payload that's under the raw body cap but
+  still an unreasonably long invoice gets a normal `422` instead.
+
+Both are configured through the same `Settings` system as everything
+else (see `.env.example`) and apply to every `/brain-os/*` endpoint;
+`GET /health` is exempt from both, same as it's exempt from auth.
+
 ## Running locally
 
 The project already has a virtualenv at `.venv` with all dependencies
@@ -162,18 +186,22 @@ request was wrong.
 .venv/bin/pytest -v
 ```
 
-34 tests cover: invoice submission and field extraction, auto-approve
+42 tests cover: invoice submission and field extraction, auto-approve
 vs. pause-for-review risk scoring, duplicate-invoice detection, the
 pause/resume checkpoint cycle (including double-resume and
 resume-on-already-completed-workflow error cases), the audit trail
 recorded for both auto-approved and human-decided workflows, the
-`/health` liveness probe, and bearer-token authentication (missing
-token, invalid token, valid token, an unconfigured token failing
-closed, `/health` staying public, and the OpenAPI schema correctly
-declaring the bearer requirement). Each test runs against an isolated
-SQLite/Chroma/checkpoint stack under pytest's `tmp_path`, driven through
-a real FastAPI `TestClient` authenticated with a test-only token that
-never touches the environment or any `.env` file
+`/health` liveness probe, bearer-token authentication (missing token,
+invalid token, valid token, an unconfigured token failing closed,
+`/health` staying public, and the OpenAPI schema correctly declaring
+the bearer requirement), rate limiting (per-key isolation, 429 +
+`Retry-After` once exceeded, failed auth never consuming quota,
+`/health` staying exempt), and request size limits (413 on an oversized
+body before parsing, 422 on a field that's merely over its own
+`max_length`). Each test runs against an isolated SQLite/Chroma/checkpoint
+stack under pytest's `tmp_path`, driven through a real FastAPI
+`TestClient` authenticated with a test-only token that never touches
+the environment or any `.env` file
 (`tests/conftest.py::TEST_API_TOKEN`).
 
 ## Running with Docker
@@ -264,9 +292,21 @@ this repo. To take it to a cloud environment:
   sufficient to keep the API from being wide open to the internet, not
   a full authz system -- add OAuth2/OIDC with real user identity before
   this needs to distinguish who is allowed to approve what.
-- **No rate limiting.** The auth layer stops unauthenticated access, not
-  a valid-token caller hammering the API; add rate limiting at the
-  gateway or in-app before launch.
+- **Rate limiter is in-memory and per-process.** Correct for the
+  single-worker/single-instance deployment this app currently documents,
+  but each process tracks its own independent counters -- running
+  multiple replicas or workers means each one enforces the limit
+  separately (effectively multiplying the real ceiling by instance
+  count), and a restart resets everyone's quota. A shared store (Redis)
+  is the fix if/when this scales beyond one instance. It also doesn't
+  protect against distributed abuse from many different valid tokens
+  at once (there's only one token today, so this doesn't currently
+  apply, but is worth remembering if per-user tokens are added later).
+- **Body-size cap relies on the `Content-Length` header.** A request
+  sent with chunked transfer-encoding (no `Content-Length`) bypasses
+  `MaxBodySizeMiddleware` and is only bounded by whatever's parsed
+  downstream; pair this with a request size limit at the reverse
+  proxy/ingress layer in production for defense in depth.
 - **Vector memory is a fingerprint match, not true semantics.** The
   offline hashing embedding catches near-identical vendor/PO/amount text
   well, but won't catch duplicates phrased very differently.
