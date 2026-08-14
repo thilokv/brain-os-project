@@ -14,6 +14,11 @@ from fastapi.testclient import TestClient
 from app.main import create_app
 from app.utils.config import get_settings
 
+# Test-only credential -- never a real secret, never read from the
+# environment or any .env file. Exists solely so tests can authenticate
+# against the same bearer-token mechanism production uses.
+TEST_API_TOKEN = "test-only-brain-os-token-do-not-use-in-prod"
+
 
 @pytest.fixture
 def client(tmp_path, monkeypatch):
@@ -22,6 +27,7 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setenv("CHROMA_PERSIST_PATH", str(tmp_path / "chroma"))
     monkeypatch.setenv("ANTHROPIC_API_KEY", "")
     monkeypatch.setenv("SLACK_BOT_TOKEN", "")
+    monkeypatch.setenv("BRAIN_OS_API_TOKEN", TEST_API_TOKEN)
     get_settings.cache_clear()
 
     app = create_app()
@@ -29,3 +35,9 @@ def client(tmp_path, monkeypatch):
         yield test_client
 
     get_settings.cache_clear()
+
+
+@pytest.fixture
+def auth_headers():
+    """Authorization header for the test-only token set on the `client` fixture."""
+    return {"Authorization": f"Bearer {TEST_API_TOKEN}"}

@@ -44,6 +44,12 @@ class Settings(BaseSettings):
     slack_bot_token: str = ""
     slack_approval_channel: str = ""
 
+    # API authentication (Bearer token for all /brain-os/* endpoints).
+    # Unlike the integration keys above, an empty value here does NOT mean
+    # "feature disabled" -- it means "reject every request" (see
+    # app/api/security.py). There is no default that opens the API.
+    brain_os_api_token: str = ""
+
     def ensure_data_dir(self) -> None:
         Path(self.database_path).parent.mkdir(parents=True, exist_ok=True)
         Path(self.checkpoint_db_path).parent.mkdir(parents=True, exist_ok=True)

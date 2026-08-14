@@ -4,12 +4,18 @@
     POST /brain-os/resume          Facility 5: Human in the Loop
     GET  /brain-os/status/{id}     Current workflow state
     GET  /brain-os/audit/{id}      Facility: Auditability
+
+Every route in this router requires a Bearer token matching
+BRAIN_OS_API_TOKEN (see app/api/security.py). GET /health is
+deliberately NOT part of this router -- it's registered directly on the
+app in app/main.py so container health checks never need credentials.
 """
 
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 
+from app.api.security import require_api_token
 from app.database import repository
 from app.models.schemas import (
     AuditTrailResponse,
@@ -26,7 +32,7 @@ from app.utils.logging import get_logger
 from app.workflows.graph import WorkflowEngine
 
 logger = get_logger(__name__)
-router = APIRouter(prefix="/brain-os", tags=["brain-os"])
+router = APIRouter(prefix="/brain-os", tags=["brain-os"], dependencies=[Depends(require_api_token)])
 
 
 def _engine(request: Request) -> WorkflowEngine:

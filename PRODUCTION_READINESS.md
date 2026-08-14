@@ -1,26 +1,30 @@
 # Production Readiness Review — Brain OS Enterprise Workflow Platform
 
 Scope: the FastAPI + LangGraph invoice-approval service in this repo,
-as containerized by the `Dockerfile` / `docker-compose.yml` added
-alongside this review. Assessed by reading the implementation, running
-the full test suite (21/21 passing), and exercising the API live
-against a running server.
+as containerized by the `Dockerfile` / `docker-compose.yml`, now with
+bearer-token authentication on every `/brain-os/*` endpoint. Assessed by
+reading the implementation, running the full test suite (34/34 passing),
+and exercising the API live against a running server (including the
+auth failure/success paths with real HTTP requests).
 
-## Overall score: 6 / 10
+## Overall score: 7 / 10
 
 **Solid, well-tested MVP with genuinely working core mechanics
 (extraction, risk scoring, LangGraph pause/resume, audit trail, health
-checks) and a clean containerization story. Not yet safe to expose,
-unauthenticated, to the public internet or to run as more than a single
-instance.** The gap between "6" and a higher score is almost entirely
-security (no authn/authz) and operational maturity (observability,
-CI/CD, backups) -- not correctness. Nothing here is fake or stubbed;
-every facility in the original spec does real work.
+checks), a clean containerization story, and the API is no longer
+open to anyone who can reach the port.** Raised from 6/10: authentication
+was the single biggest blocker in the previous review, and it's now
+implemented as a real, fail-closed, OpenAPI-documented bearer-token
+check -- not a stub. The remaining gap to a higher score is (a) that
+this is a single shared-secret token, not per-user identity/roles, and
+(b) operational maturity (rate limiting, observability, CI/CD, backups).
+Nothing here is fake or stubbed; every facility in the original spec,
+plus this auth layer, does real work.
 
 | Category | Score | Verdict |
 |---|---|---|
 | Correctness & test coverage | 4 / 5 | Strong. Real end-to-end tests against real SQLite/Chroma/checkpointer, not mocks. |
-| Security | 2 / 5 | Blocking gap: no authn/authz, no rate limiting, no request size cap. |
+| Security | 4 / 5 | Real bearer-token auth, fail-closed, constant-time compare, OpenAPI-documented. Still: single shared token (no RBAC), no rate limiting, no request size cap. |
 | Reliability & data durability | 3 / 5 | Audit trail and checkpointing are solid; no backup/restore procedure, single-writer store. |
 | Observability | 2 / 5 | Structured stdout logs and a real DB-checking health probe; no metrics, tracing, or correlation IDs. |
 | Scalability & performance | 2 / 5 | Deliberately single-instance (SQLite); documented but unimplemented Postgres path. |
@@ -32,7 +36,7 @@ every facility in the original spec does real work.
 ## 1. Correctness & test coverage -- 4/5
 
 **Strengths**
-- 21 tests, all passing, run against a real FastAPI `TestClient` driving
+- 34 tests, all passing, run against a real FastAPI `TestClient` driving
   real SQLite files, a real Chroma collection, and a real LangGraph
   `SqliteSaver` checkpointer per test (isolated under pytest's
   `tmp_path`) -- not mocked out.
@@ -42,6 +46,15 @@ every facility in the original spec does real work.
   already-auto-approved workflow (409), resuming an unknown workflow
   (404), and the exact audit-trail action sequence for both the
   auto-approve and human-decision paths.
+- 13 dedicated auth tests (`tests/test_auth.py`): missing token, invalid
+  token, valid token reaching real application logic, `/health` staying
+  public, auth failures never leaking the expected token in the response
+  body, all three protected resources individually (`/resume`,
+  `/status/{id}`, `/audit/{id}`), an unconfigured token failing closed
+  rather than silently allowing everything through, and the OpenAPI
+  schema correctly declaring the bearer requirement per-path. All run
+  against a test-only token that never touches the real environment or
+  `.env` (`tests/conftest.py::TEST_API_TOKEN`).
 - The LangGraph interrupt/resume re-execution semantics were verified
   directly against the installed library version before relying on them
   (side-effecting code sits only in nodes that provably run once), which
@@ -57,15 +70,37 @@ every facility in the original spec does real work.
   for a test suite that shouldn't depend on network/secrets, but worth
   a manual smoke test with real keys before launch).
 
-## 2. Security -- 2/5 (blocking for public/internet-facing deployment)
+## 2. Security -- 4/5
 
 **Strengths**
+- **Real bearer-token authentication** (`app/api/security.py`) on every
+  `/brain-os/*` endpoint, via FastAPI's `HTTPBearer` security scheme:
+  - Reads the expected token from `Settings.brain_os_api_token`
+    (`BRAIN_OS_API_TOKEN`) -- the existing config system, no second one.
+  - **Fails closed**: an unset or blank token rejects *every* request
+    with 401, rather than silently disabling auth. Verified by a
+    dedicated test (`test_unconfigured_token_rejects_every_request`).
+  - Compares tokens with `hmac.compare_digest` (constant-time), not `==`,
+    to avoid a timing side-channel on token comparison.
+  - Every failure mode (missing header, wrong scheme, wrong token,
+    unconfigured token) returns the identical generic
+    `{"detail": "Missing or invalid bearer token."}` -- verified live
+    and by test that the real token never appears in a 401 response body.
+  - Enforced at the router level (`dependencies=[Depends(require_api_token)]`
+    on the `/brain-os` router), not per-endpoint, so a new endpoint added
+    under that router is protected by default rather than by remembering
+    to add a check.
+  - Correctly reflected in the OpenAPI schema (`components.securitySchemes`,
+    per-path `security` requirements) -- confirmed live via `/openapi.json`
+    and by `test_openapi_schema_declares_bearer_auth` -- so Swagger's
+    "Authorize" button at `/docs` works, and `/health`'s schema entry
+    correctly has no security requirement.
 - SQL is 100% parameterized (`app/database/repository.py`) -- no string
   interpolation into queries anywhere.
-- Secrets (`ANTHROPIC_API_KEY`, `SLACK_BOT_TOKEN`) are read from
-  environment variables only, never logged, never baked into the Docker
-  image (`.dockerignore` excludes `.env`; `docker-compose.yml` injects
-  them at container start via `env_file`).
+- Secrets (`ANTHROPIC_API_KEY`, `SLACK_BOT_TOKEN`, `BRAIN_OS_API_TOKEN`)
+  are read from environment variables only, never logged, never baked
+  into the Docker image (`.dockerignore` excludes `.env`;
+  `docker-compose.yml` injects them at container start via `env_file`).
 - Docker image runs as a non-root user (`brainos`) with a minimal
   `python:3.12-slim` base and no unnecessary packages in the final
   stage.
@@ -73,26 +108,38 @@ every facility in the original spec does real work.
   `ResumeRequest`), including a non-blank check on invoice text.
 
 **Gaps (in priority order)**
-1. **No authentication or authorization.** Every endpoint, including
-   `/brain-os/resume` (which finalizes a financial approval decision),
-   is open to anyone who can reach the port. This is the single
-   biggest blocker to real production use. Add an API key header, OAuth2
-   client-credentials, or mTLS at minimum before exposing this beyond a
-   trusted internal network.
-2. **No rate limiting.** `POST /brain-os/start` triggers real work
-   (SQLite writes, Chroma embedding + query, optionally an Anthropic API
-   call) with no throttling -- vulnerable to abuse or accidental
-   traffic spikes driving up Anthropic spend.
+1. **Single shared bearer token, not per-user identity or roles.** Every
+   caller uses the same `BRAIN_OS_API_TOKEN`. There's no distinction
+   between "can submit an invoice" and "can approve one," no way to
+   revoke one caller's access without rotating the token for everyone,
+   and the `user` field recorded in the audit trail on `/resume` is
+   caller-supplied free text the token does not verify -- it identifies
+   *a* valid caller, not *which* one. Sufficient to keep the API from
+   being open to the internet; not sufficient if "who approved this
+   $50,000 invoice" needs to be a verified identity rather than a
+   self-reported string. OAuth2/OIDC with real user identity is the
+   natural upgrade path.
+2. **No rate limiting.** A valid token does not limit call volume.
+   `POST /brain-os/start` triggers real work (SQLite writes, Chroma
+   embedding + query, optionally an Anthropic API call) with no
+   throttling -- vulnerable to abuse or accidental traffic spikes
+   driving up Anthropic spend, even from an authenticated caller.
 3. **No request body size limit.** `InvoiceIntakeRequest.text` has no
    `max_length`; an oversized payload is only bounded by whatever the
    reverse proxy/ingress in front of it enforces (nothing does yet in
    this repo).
-4. **OpenAPI docs (`/docs`, `/redoc`) are enabled unconditionally.**
-   Fine for an internal MVP; many enterprises disable interactive docs
-   in production or gate them behind auth. Toggle via
-   `FastAPI(docs_url=None, redoc_url=None)` when `settings.environment == "production"`
-   if that policy applies here.
-5. **No audit log integrity protection.** `audit_trail` rows are plain
+4. **OpenAPI docs (`/docs`, `/redoc`) are enabled unconditionally and are
+   themselves unauthenticated** (only the API endpoints they describe
+   require a token). Fine for an internal MVP; many enterprises disable
+   interactive docs in production or gate them behind auth. Toggle via
+   `FastAPI(docs_url=None, redoc_url=None)` when
+   `settings.environment == "production"` if that policy applies here.
+5. **No token rotation/expiry mechanism.** `BRAIN_OS_API_TOKEN` is a
+   static value; rotating it requires an operator to change the env var
+   and restart, and there's no way to have two valid tokens during a
+   rotation window (old callers get 401 the instant the new value is
+   deployed).
+6. **No audit log integrity protection.** `audit_trail` rows are plain
    SQLite rows with no hash chaining or write-once enforcement; anyone
    with DB access could edit history. Acceptable for an MVP, worth
    revisiting if this audit trail needs to satisfy a compliance regime.
@@ -249,10 +296,15 @@ every facility in the original spec does real work.
 
 ## Blocking items before real production traffic
 
-1. Add authentication/authorization to every `/brain-os/*` endpoint.
+1. ~~Add authentication to every `/brain-os/*` endpoint.~~ **Done** --
+   bearer-token auth via `BRAIN_OS_API_TOKEN`, fail-closed, OpenAPI-documented.
+   Revisit if per-user identity/roles turn out to be required (see
+   Security gap #1) -- that's a design upgrade, not a missing basic.
 2. Add rate limiting and a request body size cap.
 3. Run `docker build` / `docker compose up` for real at least once and
    fix whatever the sandbox that produced this repo couldn't verify.
+   `docker-compose.yml` now also passes `BRAIN_OS_API_TOKEN` through --
+   confirm it resolves correctly from a real `.env` in that first run.
 4. Decide and document a backup policy for the `brain-os-data` volume.
 5. If more than one instance/replica is needed: swap SQLite for
    Postgres (both the app repository and the LangGraph checkpointer) and
@@ -260,6 +312,9 @@ every facility in the original spec does real work.
 
 ## Recommended next increment (non-blocking, high value)
 
+- Upgrade the shared bearer token to OAuth2/OIDC with real per-user
+  identity once "who specifically approved this" needs to be a verified
+  fact rather than a self-reported `user` string in the request body.
 - Wire a `/metrics` endpoint and basic dashboards (request rate, error
   rate, p50/p95 latency, auto-approve vs. manual-review ratio).
 - Add correlation IDs to logs (e.g. `workflow_id` on every log line

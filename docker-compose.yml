@@ -27,6 +27,10 @@ services:
       ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-sonnet-4-5}
       SLACK_BOT_TOKEN: ${SLACK_BOT_TOKEN:-}
       SLACK_APPROVAL_CHANNEL: ${SLACK_APPROVAL_CHANNEL:-}
+      # Required -- every /brain-os/* request gets 401 until this is set
+      # to a real value in .env or the shell environment. No default here
+      # is intentional: there is no value that should silently open the API.
+      BRAIN_OS_API_TOKEN: ${BRAIN_OS_API_TOKEN:-}
     volumes:
       # Named volume so brain_os.db / checkpoints.db / the Chroma index
       # survive container restarts and image rebuilds.

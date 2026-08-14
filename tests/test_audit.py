@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 
-def test_audit_trail_records_full_lifecycle_for_auto_approved_workflow(client):
-    started = client.post("/brain-os/start", json={"text": "Vendor: Small Co\nPO Number: PO-1\nAmount: $100"}).json()
+def test_audit_trail_records_full_lifecycle_for_auto_approved_workflow(client, auth_headers):
+    started = client.post(
+        "/brain-os/start", json={"text": "Vendor: Small Co\nPO Number: PO-1\nAmount: $100"}, headers=auth_headers
+    ).json()
     workflow_id = started["workflow_id"]
 
-    response = client.get(f"/brain-os/audit/{workflow_id}")
+    response = client.get(f"/brain-os/audit/{workflow_id}", headers=auth_headers)
     assert response.status_code == 200
     events = response.json()["events"]
     actions = [event["action"] for event in events]
@@ -24,17 +26,20 @@ def test_audit_trail_records_full_lifecycle_for_auto_approved_workflow(client):
         assert event["status"]
 
 
-def test_audit_trail_records_human_decision_for_paused_workflow(client):
+def test_audit_trail_records_human_decision_for_paused_workflow(client, auth_headers):
     started = client.post(
-        "/brain-os/start", json={"text": "Vendor: Acme Logistics\nPO Number: PO-1001\nAmount: $7500"}
+        "/brain-os/start",
+        json={"text": "Vendor: Acme Logistics\nPO Number: PO-1001\nAmount: $7500"},
+        headers=auth_headers,
     ).json()
     workflow_id = started["workflow_id"]
     client.post(
         "/brain-os/resume",
         json={"workflow_id": workflow_id, "decision": "rejected", "user": "bob", "note": "too risky"},
+        headers=auth_headers,
     )
 
-    events = client.get(f"/brain-os/audit/{workflow_id}").json()["events"]
+    events = client.get(f"/brain-os/audit/{workflow_id}", headers=auth_headers).json()["events"]
     actions = [event["action"] for event in events]
 
     assert "notification.slack" in actions
@@ -44,6 +49,6 @@ def test_audit_trail_records_human_decision_for_paused_workflow(client):
     assert decision_event["detail"] == "too risky"
 
 
-def test_audit_trail_unknown_workflow_returns_404(client):
-    response = client.get("/brain-os/audit/wf-does-not-exist")
+def test_audit_trail_unknown_workflow_returns_404(client, auth_headers):
+    response = client.get("/brain-os/audit/wf-does-not-exist", headers=auth_headers)
     assert response.status_code == 404
