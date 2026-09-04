@@ -97,7 +97,13 @@ export function AuditLogTable({ events, workflows }: { events: AuditEvent[]; wor
             }}
           >
             <SelectTrigger className="h-9 w-full sm:w-56">
-              <SelectValue placeholder="All actions" />
+              {/* Base UI's Select.Value renders the raw `value` string by
+                  default (unlike Radix) -- it does not auto-resolve to the
+                  matching SelectItem's label. The children render-prop is
+                  the documented way to map value -> display label. */}
+              <SelectValue placeholder="All actions">
+                {(value: string) => (value === "all" ? "All actions" : (ACTION_LABELS[value as AuditAction] ?? value))}
+              </SelectValue>
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="all">All actions</SelectItem>
