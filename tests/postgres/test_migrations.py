@@ -25,6 +25,16 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 ALEMBIC_INI_PATH = REPO_ROOT / "alembic.ini"
 BOOTSTRAP_REVISION = "b95ff6be48e7"
 ORGANIZATIONS_REVISION = "fbc84c7b682e"  # added in Phase 2B.1, chained after BOOTSTRAP_REVISION
+USERS_AND_MEMBERSHIPS_REVISION = "6d389c38a0c8"  # added in Phase 2B.2, chained after ORGANIZATIONS_REVISION
+
+# Every migration added so far, in chain order. This list is the only
+# thing that needs a new line when a future milestone adds a migration
+# -- unlike a hardcoded "the current head is X" assertion, which broke
+# twice in a row (2B.1 then 2B.2) for the same structural reason. The
+# tests below check chain *health* (linear, no branches, every expected
+# revision present and correctly ordered), not which specific revision
+# happens to be the head today.
+ALL_REVISIONS_IN_ORDER = [BOOTSTRAP_REVISION, ORGANIZATIONS_REVISION, USERS_AND_MEMBERSHIPS_REVISION]
 
 POSTGRES_TEST_DSN = os.environ.get("POSTGRES_TEST_DSN", "")
 
@@ -52,18 +62,37 @@ def test_alembic_configuration_loads():
     assert Path(script_dir.dir).resolve() == (REPO_ROOT / "alembic").resolve()
 
 
-def test_organizations_migration_is_the_current_head():
-    """Confirms the migration chain is exactly bootstrap -> organizations
-    with a single linear head (no accidental branch) -- updated from
-    Phase 2A.2's "bootstrap is the only head" check now that Phase 2B.1
-    has chained the organizations migration after it."""
+def test_migration_chain_has_a_single_linear_head():
+    """No accidental branching -- exactly one head, regardless of how
+    many migrations have been added. This assertion never needs to
+    change as new milestones add migrations (unlike asserting which
+    specific revision is currently the head, which broke twice in a
+    row for that exact reason)."""
     cfg = _alembic_config()
     script_dir = ScriptDirectory.from_config(cfg)
-    heads = script_dir.get_heads()
-    assert heads == [ORGANIZATIONS_REVISION]
+    assert len(script_dir.get_heads()) == 1
 
-    organizations_revision = script_dir.get_revision(ORGANIZATIONS_REVISION)
-    assert organizations_revision.down_revision == BOOTSTRAP_REVISION
+
+def test_all_expected_revisions_are_present_and_correctly_chained():
+    """Confirms every migration added so far exists and each one's
+    down_revision correctly points to its predecessor -- bootstrap ->
+    organizations -> users_and_memberships, in that order."""
+    cfg = _alembic_config()
+    script_dir = ScriptDirectory.from_config(cfg)
+
+    revisions = [script_dir.get_revision(rev_id) for rev_id in ALL_REVISIONS_IN_ORDER]
+    assert all(rev is not None for rev in revisions), "one or more expected revisions is missing from the chain"
+
+    assert revisions[0].down_revision is None, "the first migration should have no parent"
+    for parent, child in zip(revisions, revisions[1:]):
+        assert child.down_revision == parent.revision, (
+            f"{child.revision} should be chained directly after {parent.revision}"
+        )
+
+    assert script_dir.get_heads() == [ALL_REVISIONS_IN_ORDER[-1]], (
+        "the last entry in ALL_REVISIONS_IN_ORDER should be the current head -- "
+        "update this list when a new migration is added"
+    )
 
 
 def test_running_a_db_command_without_postgres_dsn_fails_clearly(monkeypatch):
