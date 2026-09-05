@@ -10,5 +10,9 @@ slack-sdk>=3.27.0
 anthropic>=0.18.0
 httpx>=0.27.0
 
+# PostgreSQL (Phase 2A foundation -- see PHASE2_COMMERCIAL_ARCHITECTURE.md;
+# not used by /brain-os/* or the original SQLite schema).
+psycopg2-binary>=2.9.9
+
 # testing
 pytest>=8.0.0

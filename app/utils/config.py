@@ -2,6 +2,7 @@
 
 from functools import lru_cache
 from pathlib import Path
+from typing import Literal
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -27,9 +28,20 @@ class Settings(BaseSettings):
     # Risk engine
     auto_approve_threshold: float = 5000.0
 
-    # SQLite
+    # SQLite (the only backend /brain-os/* and the original five tables ever
+    # use -- see PHASE2_COMMERCIAL_ARCHITECTURE.md §11/§14. Untouched by the
+    # database_backend/postgres_dsn settings below.)
     database_path: str = str(DATA_DIR / "brain_os.db")
     checkpoint_db_path: str = str(DATA_DIR / "checkpoints.db")
+
+    # PostgreSQL (Phase 2A foundation only -- not wired into any route yet).
+    # database_backend defaults to "sqlite" so existing behavior is
+    # unchanged with zero configuration required. Setting it to "postgres"
+    # does not affect /brain-os/*, which always uses database_path above;
+    # it only controls whether app/database/postgres_connection.py's pool
+    # is initialized (see app/main.py in a later milestone).
+    database_backend: Literal["sqlite", "postgres"] = "sqlite"
+    postgres_dsn: str = ""
 
     # ChromaDB
     chroma_persist_path: str = str(DATA_DIR / "chroma")
