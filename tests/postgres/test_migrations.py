@@ -24,6 +24,7 @@ from app.utils.config import get_settings
 REPO_ROOT = Path(__file__).resolve().parents[2]
 ALEMBIC_INI_PATH = REPO_ROOT / "alembic.ini"
 BOOTSTRAP_REVISION = "b95ff6be48e7"
+ORGANIZATIONS_REVISION = "fbc84c7b682e"  # added in Phase 2B.1, chained after BOOTSTRAP_REVISION
 
 POSTGRES_TEST_DSN = os.environ.get("POSTGRES_TEST_DSN", "")
 
@@ -51,14 +52,18 @@ def test_alembic_configuration_loads():
     assert Path(script_dir.dir).resolve() == (REPO_ROOT / "alembic").resolve()
 
 
-def test_bootstrap_migration_is_the_only_head():
-    """Confirms exactly one migration exists so far, and it's the
-    Phase 2A.2 bootstrap -- no commercial domain schema has been
-    introduced yet, per this milestone's scope."""
+def test_organizations_migration_is_the_current_head():
+    """Confirms the migration chain is exactly bootstrap -> organizations
+    with a single linear head (no accidental branch) -- updated from
+    Phase 2A.2's "bootstrap is the only head" check now that Phase 2B.1
+    has chained the organizations migration after it."""
     cfg = _alembic_config()
     script_dir = ScriptDirectory.from_config(cfg)
     heads = script_dir.get_heads()
-    assert heads == [BOOTSTRAP_REVISION]
+    assert heads == [ORGANIZATIONS_REVISION]
+
+    organizations_revision = script_dir.get_revision(ORGANIZATIONS_REVISION)
+    assert organizations_revision.down_revision == BOOTSTRAP_REVISION
 
 
 def test_running_a_db_command_without_postgres_dsn_fails_clearly(monkeypatch):
