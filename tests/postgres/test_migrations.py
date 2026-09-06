@@ -26,6 +26,7 @@ ALEMBIC_INI_PATH = REPO_ROOT / "alembic.ini"
 BOOTSTRAP_REVISION = "b95ff6be48e7"
 ORGANIZATIONS_REVISION = "fbc84c7b682e"  # added in Phase 2B.1, chained after BOOTSTRAP_REVISION
 USERS_AND_MEMBERSHIPS_REVISION = "6d389c38a0c8"  # added in Phase 2B.2, chained after ORGANIZATIONS_REVISION
+PASSWORD_CREDENTIALS_REVISION = "01401ec64495"  # added in Phase 2B.4, chained after USERS_AND_MEMBERSHIPS_REVISION
 
 # Every migration added so far, in chain order. This list is the only
 # thing that needs a new line when a future milestone adds a migration
@@ -34,7 +35,12 @@ USERS_AND_MEMBERSHIPS_REVISION = "6d389c38a0c8"  # added in Phase 2B.2, chained 
 # tests below check chain *health* (linear, no branches, every expected
 # revision present and correctly ordered), not which specific revision
 # happens to be the head today.
-ALL_REVISIONS_IN_ORDER = [BOOTSTRAP_REVISION, ORGANIZATIONS_REVISION, USERS_AND_MEMBERSHIPS_REVISION]
+ALL_REVISIONS_IN_ORDER = [
+    BOOTSTRAP_REVISION,
+    ORGANIZATIONS_REVISION,
+    USERS_AND_MEMBERSHIPS_REVISION,
+    PASSWORD_CREDENTIALS_REVISION,
+]
 
 POSTGRES_TEST_DSN = os.environ.get("POSTGRES_TEST_DSN", "")
 

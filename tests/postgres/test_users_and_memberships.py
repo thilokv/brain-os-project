@@ -39,6 +39,16 @@ requires_postgres = pytest.mark.skipif(
 
 ALL_ROLES = ("owner", "admin", "finance", "ops_manager", "analyst", "viewer")
 
+# create_user() requires a password_hash as of Phase 2B.4 (see
+# tests/postgres/test_authentication.py for the real credential/login
+# tests) -- these repository/isolation tests don't exercise authentication
+# at all, so a single real hash computed once at import time is reused
+# everywhere below rather than hashing a fresh password per call (bcrypt
+# is deliberately slow; that cost isn't relevant to what these tests check).
+from app.services.auth_service import hash_password
+
+_TEST_PASSWORD_HASH = hash_password("not-a-real-account-password")
+
 
 # ---------------------------------------------------------------------------
 # Pydantic-level validation -- no database required, always run.
@@ -46,19 +56,33 @@ ALL_ROLES = ("owner", "admin", "finance", "ops_manager", "analyst", "viewer")
 
 
 def test_user_create_request_accepts_valid_input():
-    request = UserCreateRequest(email="alice@example.com", display_name="Alice Chen")
+    request = UserCreateRequest(email="alice@example.com", display_name="Alice Chen", password="correct-horse-battery")
     assert request.email == "alice@example.com"
     assert request.display_name == "Alice Chen"
 
 
 def test_user_create_request_rejects_blank_display_name():
     with pytest.raises(ValidationError):
-        UserCreateRequest(email="alice@example.com", display_name="")
+        UserCreateRequest(email="alice@example.com", display_name="", password="correct-horse-battery")
 
 
 def test_user_create_request_rejects_blank_email():
     with pytest.raises(ValidationError):
-        UserCreateRequest(email="", display_name="Alice Chen")
+        UserCreateRequest(email="", display_name="Alice Chen", password="correct-horse-battery")
+
+
+def test_user_create_request_rejects_too_short_password():
+    """8-character minimum -- a baseline, not a full password-policy
+    engine (see app/models/tenancy_schemas.py)."""
+    with pytest.raises(ValidationError):
+        UserCreateRequest(email="alice@example.com", display_name="Alice Chen", password="short1")
+
+
+def test_user_create_request_rejects_password_longer_than_bcrypt_limit():
+    """72 bytes is bcrypt's own hard input limit (see
+    app/services/auth_service.py); rejected here, not truncated later."""
+    with pytest.raises(ValidationError):
+        UserCreateRequest(email="alice@example.com", display_name="Alice Chen", password="x" * 73)
 
 
 def test_user_out_rejects_invalid_status():
@@ -104,7 +128,7 @@ def test_membership_out_rejects_invalid_status():
 def test_create_and_get_user_round_trip():
     from app.database.postgres.tenancy import create_user, get_user
 
-    created = create_user(POSTGRES_TEST_DSN, email="bob.round-trip@example.com", display_name="Bob Webb")
+    created = create_user(POSTGRES_TEST_DSN, email="bob.round-trip@example.com", display_name="Bob Webb", password_hash=_TEST_PASSWORD_HASH)
     assert created.id.startswith("user-")
     assert created.email == "bob.round-trip@example.com"
     assert created.display_name == "Bob Webb"
@@ -121,7 +145,7 @@ def test_create_and_get_user_round_trip():
 def test_get_user_by_email_finds_the_right_user():
     from app.database.postgres.tenancy import create_user, get_user_by_email
 
-    created = create_user(POSTGRES_TEST_DSN, email="priya.lookup@example.com", display_name="Priya Nair")
+    created = create_user(POSTGRES_TEST_DSN, email="priya.lookup@example.com", display_name="Priya Nair", password_hash=_TEST_PASSWORD_HASH)
     found = get_user_by_email(POSTGRES_TEST_DSN, "priya.lookup@example.com")
     assert found is not None
     assert found.id == created.id
@@ -150,9 +174,9 @@ def test_duplicate_email_is_rejected_at_the_database_level():
 
     from app.database.postgres.tenancy import create_user
 
-    create_user(POSTGRES_TEST_DSN, email="duplicate-test@example.com", display_name="First Account")
+    create_user(POSTGRES_TEST_DSN, email="duplicate-test@example.com", display_name="First Account", password_hash=_TEST_PASSWORD_HASH)
     with pytest.raises(psycopg2.errors.UniqueViolation):
-        create_user(POSTGRES_TEST_DSN, email="duplicate-test@example.com", display_name="Second Account")
+        create_user(POSTGRES_TEST_DSN, email="duplicate-test@example.com", display_name="Second Account", password_hash=_TEST_PASSWORD_HASH)
 
 
 @requires_postgres
@@ -160,7 +184,7 @@ def test_create_and_get_membership_round_trip():
     from app.database.postgres.tenancy import create_membership, create_organization, create_user, get_membership
 
     org = create_organization(POSTGRES_TEST_DSN, name="Membership Round Trip Org", industry_type="ecommerce")
-    user = create_user(POSTGRES_TEST_DSN, email="membership.roundtrip@example.com", display_name="Test User")
+    user = create_user(POSTGRES_TEST_DSN, email="membership.roundtrip@example.com", display_name="Test User", password_hash=_TEST_PASSWORD_HASH)
 
     created = create_membership(POSTGRES_TEST_DSN, org_id=org.id, user_id=user.id, role="ops_manager")
     assert created.id.startswith("mem-")
@@ -182,7 +206,7 @@ def test_get_membership_returns_none_when_no_membership_exists():
     from app.database.postgres.tenancy import create_organization, create_user, get_membership
 
     org = create_organization(POSTGRES_TEST_DSN, name="No Membership Org", industry_type="manufacturing")
-    user = create_user(POSTGRES_TEST_DSN, email="no.membership@example.com", display_name="Outsider")
+    user = create_user(POSTGRES_TEST_DSN, email="no.membership@example.com", display_name="Outsider", password_hash=_TEST_PASSWORD_HASH)
 
     assert get_membership(POSTGRES_TEST_DSN, org.id, user.id) is None
 
@@ -197,7 +221,7 @@ def test_membership_with_invalid_role_is_rejected_at_the_database_level():
     from app.database.postgres_connection import get_postgres_connection
 
     org = create_organization(POSTGRES_TEST_DSN, name="Bad Role Org", industry_type="ecommerce")
-    user = create_user(POSTGRES_TEST_DSN, email="bad.role@example.com", display_name="Bad Role User")
+    user = create_user(POSTGRES_TEST_DSN, email="bad.role@example.com", display_name="Bad Role User", password_hash=_TEST_PASSWORD_HASH)
 
     with pytest.raises(psycopg2.errors.CheckViolation):
         with get_postgres_connection(POSTGRES_TEST_DSN) as conn:
@@ -214,7 +238,7 @@ def test_membership_with_nonexistent_org_is_rejected_by_foreign_key():
 
     from app.database.postgres.tenancy import create_membership, create_user
 
-    user = create_user(POSTGRES_TEST_DSN, email="fk.org.test@example.com", display_name="FK Org Test")
+    user = create_user(POSTGRES_TEST_DSN, email="fk.org.test@example.com", display_name="FK Org Test", password_hash=_TEST_PASSWORD_HASH)
     with pytest.raises(psycopg2.errors.ForeignKeyViolation):
         create_membership(POSTGRES_TEST_DSN, org_id="org-does-not-exist", user_id=user.id, role="viewer")
 
@@ -240,7 +264,7 @@ def test_duplicate_membership_for_same_org_and_user_is_rejected():
     from app.database.postgres.tenancy import create_membership, create_organization, create_user
 
     org = create_organization(POSTGRES_TEST_DSN, name="Duplicate Membership Org", industry_type="ecommerce")
-    user = create_user(POSTGRES_TEST_DSN, email="duplicate.membership@example.com", display_name="Dup Test")
+    user = create_user(POSTGRES_TEST_DSN, email="duplicate.membership@example.com", display_name="Dup Test", password_hash=_TEST_PASSWORD_HASH)
 
     create_membership(POSTGRES_TEST_DSN, org_id=org.id, user_id=user.id, role="analyst")
     with pytest.raises(psycopg2.errors.UniqueViolation):
@@ -259,7 +283,7 @@ def test_a_user_can_hold_memberships_in_more_than_one_organization():
         list_memberships_for_user,
     )
 
-    user = create_user(POSTGRES_TEST_DSN, email="multi.org@example.com", display_name="Multi Org User")
+    user = create_user(POSTGRES_TEST_DSN, email="multi.org@example.com", display_name="Multi Org User", password_hash=_TEST_PASSWORD_HASH)
     org_a = create_organization(POSTGRES_TEST_DSN, name="Multi Org A", industry_type="ecommerce")
     org_b = create_organization(POSTGRES_TEST_DSN, name="Multi Org B", industry_type="manufacturing")
 
@@ -292,8 +316,8 @@ def test_org_membership_list_never_includes_a_user_from_a_different_org():
     org_a = create_organization(POSTGRES_TEST_DSN, name="Isolation Org A", industry_type="ecommerce")
     org_b = create_organization(POSTGRES_TEST_DSN, name="Isolation Org B", industry_type="ecommerce")
 
-    user_a = create_user(POSTGRES_TEST_DSN, email="isolation.a@example.com", display_name="Org A User")
-    user_b = create_user(POSTGRES_TEST_DSN, email="isolation.b@example.com", display_name="Org B User")
+    user_a = create_user(POSTGRES_TEST_DSN, email="isolation.a@example.com", display_name="Org A User", password_hash=_TEST_PASSWORD_HASH)
+    user_b = create_user(POSTGRES_TEST_DSN, email="isolation.b@example.com", display_name="Org B User", password_hash=_TEST_PASSWORD_HASH)
 
     create_membership(POSTGRES_TEST_DSN, org_id=org_a.id, user_id=user_a.id, role="admin")
     create_membership(POSTGRES_TEST_DSN, org_id=org_b.id, user_id=user_b.id, role="admin")
@@ -314,7 +338,7 @@ def test_get_membership_does_not_leak_across_organizations():
 
     org_a = create_organization(POSTGRES_TEST_DSN, name="Cross-Tenant Org A", industry_type="ecommerce")
     org_b = create_organization(POSTGRES_TEST_DSN, name="Cross-Tenant Org B", industry_type="ecommerce")
-    user = create_user(POSTGRES_TEST_DSN, email="cross.tenant@example.com", display_name="Cross Tenant User")
+    user = create_user(POSTGRES_TEST_DSN, email="cross.tenant@example.com", display_name="Cross Tenant User", password_hash=_TEST_PASSWORD_HASH)
 
     create_membership(POSTGRES_TEST_DSN, org_id=org_b.id, user_id=user.id, role="owner")
 
@@ -331,8 +355,8 @@ def test_same_role_in_different_orgs_does_not_cross_contaminate():
 
     org_a = create_organization(POSTGRES_TEST_DSN, name="Same Role Org A", industry_type="ecommerce")
     org_b = create_organization(POSTGRES_TEST_DSN, name="Same Role Org B", industry_type="retail_distribution")
-    owner_a = create_user(POSTGRES_TEST_DSN, email="owner.a@example.com", display_name="Owner A")
-    owner_b = create_user(POSTGRES_TEST_DSN, email="owner.b@example.com", display_name="Owner B")
+    owner_a = create_user(POSTGRES_TEST_DSN, email="owner.a@example.com", display_name="Owner A", password_hash=_TEST_PASSWORD_HASH)
+    owner_b = create_user(POSTGRES_TEST_DSN, email="owner.b@example.com", display_name="Owner B", password_hash=_TEST_PASSWORD_HASH)
 
     create_membership(POSTGRES_TEST_DSN, org_id=org_a.id, user_id=owner_a.id, role="owner")
     create_membership(POSTGRES_TEST_DSN, org_id=org_b.id, user_id=owner_b.id, role="owner")

@@ -62,6 +62,18 @@ class Settings(BaseSettings):
     # app/api/security.py). There is no default that opens the API.
     brain_os_api_token: str = ""
 
+    # Commercial-API authentication (Phase 2B.4) -- signs/verifies the JWTs
+    # issued by app/services/auth_service.py to resolve a real user identity
+    # for app/api/dependencies/authorization.py's get_current_membership().
+    # Entirely separate from brain_os_api_token above: that's a single
+    # static service token for /brain-os/*; this is per-user JWTs for the
+    # commercial multi-tenant surface. Same fail-closed discipline applies
+    # -- an empty secret must never be treated as "auth disabled" (see
+    # app/services/auth_service.py, which refuses to issue or verify a
+    # token when this is blank).
+    jwt_secret_key: str = ""
+    jwt_expiry_minutes: int = 60
+
     # Rate limiting: max requests per caller (keyed by bearer token) within
     # a rolling window, enforced per process (see app/api/rate_limit.py).
     rate_limit_max_requests: int = 60

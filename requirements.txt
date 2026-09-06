@@ -22,5 +22,14 @@ psycopg2-binary>=2.9.9
 # same discipline as the existing SQLite repository.
 alembic>=1.13.0
 
+# Authentication (Phase 2B.4). bcrypt was already present transitively
+# (via chromadb) but is now a direct, intentional dependency for password
+# hashing. PyJWT is the minimal, standard library for signing/verifying
+# the HS256 access tokens issued by app/services/auth_service.py -- no
+# broader auth framework (e.g. python-jose, authlib) is needed for a
+# single symmetric-key issue/verify use case.
+bcrypt>=4.0.0
+pyjwt>=2.8.0
+
 # testing
 pytest>=8.0.0

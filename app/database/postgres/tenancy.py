@@ -86,8 +86,16 @@ def get_organization(postgres_dsn: str, org_id: str) -> Optional[OrganizationOut
 # ---------------------------------------------------------------------------
 
 
-def create_user(postgres_dsn: str, email: str, display_name: str) -> UserOut:
+def create_user(postgres_dsn: str, email: str, display_name: str, password_hash: str) -> UserOut:
     """Creates a new user (global identity) and returns it as persisted.
+
+    password_hash must already be a bcrypt hash (see
+    app.services.auth_service.hash_password) -- this function persists
+    whatever it is given and never hashes or validates a plaintext
+    password itself; that responsibility stays in the service layer, not
+    the repository. Never returned by this function or any query below:
+    UserOut has no password_hash field, so it can never leak through an
+    API response by accident.
 
     Raises psycopg2.errors.UniqueViolation if the email is already in use
     -- callers should catch this to return a clean "email already
@@ -98,11 +106,11 @@ def create_user(postgres_dsn: str, email: str, display_name: str) -> UserOut:
         with conn.cursor() as cursor:
             cursor.execute(
                 """
-                INSERT INTO users (id, email, display_name)
-                VALUES (%s, %s, %s)
+                INSERT INTO users (id, email, display_name, password_hash)
+                VALUES (%s, %s, %s, %s)
                 RETURNING id, email, display_name, status, last_login_at, created_at
                 """,
-                (user_id, email, display_name),
+                (user_id, email, display_name, password_hash),
             )
             row = cursor.fetchone()
     return UserOut(**dict(row))
@@ -139,6 +147,39 @@ def get_user_by_email(postgres_dsn: str, email: str) -> Optional[UserOut]:
             )
             row = cursor.fetchone()
     return UserOut(**dict(row)) if row else None
+
+
+def _get_user_credentials(postgres_dsn: str, email: str) -> Optional[dict]:
+    """Internal helper for the authentication flow only (see
+    app.api.dependencies.auth.authenticate_user) -- the only place in
+    this codebase that reads password_hash. Returns a plain dict, not
+    UserOut, precisely because UserOut has no password_hash field and
+    must never gain one; nothing outside the authentication path should
+    call this."""
+    with get_postgres_connection(postgres_dsn) as conn:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT id, email, display_name, status, last_login_at, created_at, password_hash
+                FROM users
+                WHERE email = %s
+                """,
+                (email,),
+            )
+            row = cursor.fetchone()
+    return dict(row) if row else None
+
+
+def update_last_login(postgres_dsn: str, user_id: str) -> None:
+    """Records that a user just successfully authenticated. Called only
+    after password verification succeeds and the account is confirmed
+    active -- never on a failed attempt."""
+    with get_postgres_connection(postgres_dsn) as conn:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                "UPDATE users SET last_login_at = now() WHERE id = %s",
+                (user_id,),
+            )
 
 
 # ---------------------------------------------------------------------------

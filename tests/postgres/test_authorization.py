@@ -189,9 +189,13 @@ def test_multiple_allowed_roles_all_pass(client):
         assert response.status_code == 200, f"role {role!r} should have been allowed"
 
 
-def test_get_current_membership_raises_not_implemented_if_actually_invoked():
-    """Confirms the placeholder cannot silently pretend to resolve real
-    identity -- calling it directly (i.e. without an override, as a
-    real unwired route would) fails loudly, not silently."""
-    with pytest.raises(NotImplementedError):
+def test_get_current_membership_requires_org_id_and_a_verified_user():
+    """Phase 2B.4 replaced the placeholder with a real resolver that
+    needs org_id (a request parameter) and a verified user (from
+    get_current_user, itself derived from a signed JWT) -- calling it
+    with neither fails immediately with a TypeError, not a silent
+    fallback to trusting some other, spoofable source of identity. Full
+    real-resolution behavior (correct org, cross-tenant, inactive
+    membership, etc.) is covered in tests/postgres/test_authentication.py."""
+    with pytest.raises(TypeError):
         get_current_membership()

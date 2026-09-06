@@ -1,31 +1,33 @@
-"""Role/permission enforcement for the future commercial API surface -- Phase 2B.3.
+"""Role/permission enforcement for the future commercial API surface --
+Phase 2B.3 (authorization logic) + Phase 2B.4 (real identity resolution).
 
-This is authorization logic only: given "this caller has membership M
-in this org", decide whether M's role is allowed to proceed. It is
-deliberately NOT wired to any real, reachable route yet, and does not
-touch /brain-os/*, the dashboard, or SQLite in any way.
+This is authorization logic: given "this caller has membership M in
+this org", decide whether M's role is allowed to proceed. Identity
+itself -- who is actually making the request -- is resolved by
+app.api.dependencies.auth.get_current_user from a signed JWT, never
+from a client-supplied header; see that module for why a bearer token
+is trustworthy (the signature) even though a header is not, by itself.
 
-Why identity resolution is a placeholder here, not a real
-implementation: authentication (verifying who is actually making a
-request -- a session cookie, a JWT) is an explicitly separate, later
-milestone. `get_current_membership()` below intentionally raises
-`NotImplementedError` if ever actually invoked, rather than trusting
-any client-supplied header/parameter as if it were verified identity --
-that would be a real security shortcut dressed up as a stand-in, not a
-safe placeholder. Tests exercise `require_role()`'s real logic by
-substituting a controlled membership via FastAPI's
-`app.dependency_overrides[get_current_membership] = ...` mechanism, so
-the authorization logic itself is fully and honestly tested without
-needing (or faking) authentication. When the authentication milestone
-lands, it only needs to replace `get_current_membership` with a real
-implementation that derives org_id/user_id from a verified session and
-looks up the membership (via app.database.postgres.tenancy.get_membership)
--- require_role() itself does not change.
+`get_current_membership()` takes `org_id` as a plain parameter -- this
+is a REQUEST parameter (which org this request is about, e.g. from a
+route path like `/orgs/{org_id}/...`), not a credential, and is never
+trusted as proof the caller belongs to that org. The actual membership
+is looked up fresh from PostgreSQL on every request, keyed by this
+org_id and the verified user_id from get_current_user() -- a client can
+put any org_id in a URL, but only ever gets a non-None membership back
+for an org where a real membership row exists for their real, verified
+identity. This function is still not wired to any real, reachable route
+in this milestone: doing so requires that route to declare an `org_id`
+path parameter for FastAPI to inject here, which is the next, later
+milestone's concern -- require_role() itself needs no change either way.
 
 Status code discipline, locked in PHASE2_COMMERCIAL_ARCHITECTURE.md §14:
 role/permission failures are always 403. Plan/usage entitlement failures
 (a separate, later concern -- Phase 2C) are 402. Nothing in this module
-ever raises 402.
+ever raises 402. Authentication failures (invalid/missing/expired
+credentials -- we don't know who you are at all) are 401 and raised by
+get_current_user, not here; by the time this module runs, identity is
+already verified and the only remaining question is access.
 """
 
 from __future__ import annotations
@@ -34,34 +36,37 @@ from typing import Callable, Optional
 
 from fastapi import Depends, HTTPException, status
 
-from app.models.tenancy_schemas import MembershipOut, MembershipRole
+from app.api.dependencies.auth import get_current_user
+from app.database.postgres.tenancy import get_membership
+from app.models.tenancy_schemas import MembershipOut, MembershipRole, UserOut
+from app.utils.config import Settings, get_settings
 
 _ACTIVE_MEMBERSHIP_STATUS = "active"
 
 
-def get_current_membership() -> Optional[MembershipOut]:
-    """Placeholder identity/membership resolver.
+def get_current_membership(
+    org_id: str,
+    user: UserOut = Depends(get_current_user),
+    settings: Settings = Depends(get_settings),
+) -> Optional[MembershipOut]:
+    """Resolves the verified caller's membership in a specific org.
 
     Returns Optional, not MembershipOut, because "the caller has no
     membership in this org at all" is a real, expected outcome (an
     authenticated user with zero access to a given org) -- not an
     error condition to special-case away.
 
-    Not implemented until the authentication milestone. Real routes
-    must not depend on `require_role()` (and therefore not on this
-    function) until that milestone replaces this with one that derives
-    org_id/user_id from a verified session -- never from client-supplied,
-    spoofable input -- and looks up the membership via
-    app.database.postgres.tenancy.get_membership (returning None exactly
-    when that lookup returns None).
+    `user` is only ever the identity get_current_user() resolved from a
+    verified JWT (401 already raised there if that failed) -- never a
+    client-supplied user_id. The membership itself is looked up by
+    app.database.postgres.tenancy.get_membership, returning None exactly
+    when that lookup returns None.
 
-    Tests override this via `app.dependency_overrides`; they never call
-    it directly, and never rely on it actually resolving anything here.
+    Tests may still override this via `app.dependency_overrides` to
+    substitute a controlled membership without needing a real database
+    or a real JWT, exactly as Phase 2B.3's tests already do.
     """
-    raise NotImplementedError(
-        "get_current_membership is not implemented until the authentication milestone. "
-        "Do not depend on require_role() from any real route until then."
-    )
+    return get_membership(settings.postgres_dsn, org_id, user.id)
 
 
 def _forbidden(detail: str) -> HTTPException:

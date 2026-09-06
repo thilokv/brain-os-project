@@ -59,10 +59,19 @@ class UserCreateRequest(BaseModel):
     validation can be added later without disruption if a real signup
     flow needs it; uniqueness is enforced at the database level (users.email
     UNIQUE) regardless.
+
+    password is the plaintext credential as submitted -- it is hashed
+    (app.services.auth_service.hash_password) before it ever reaches the
+    repository layer or the database; this model itself never touches
+    storage. max_length=72 matches bcrypt's own hard input limit (see
+    auth_service._BCRYPT_MAX_PASSWORD_BYTES) so an over-length password
+    is rejected here with a clear validation error, not truncated
+    silently later.
     """
 
     email: str = Field(..., min_length=1, max_length=320)
     display_name: str = Field(..., min_length=1, max_length=200)
+    password: str = Field(..., min_length=8, max_length=72)
 
 
 class UserOut(BaseModel):
